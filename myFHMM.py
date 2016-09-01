@@ -23,6 +23,10 @@
 import numpy as np
 from numpy.linalg import inv
 from numpy.linalg import det
+from numpy.linalg import svd
+from numpy.linalg import norm
+from numpy.linalg import pinv
+
 X=np.loadtxt('mydata.txt')
 M=3
 K=2
@@ -64,7 +68,7 @@ def PMFHMM(X,T=0,M=2,K=2,cycleBW=100,tol=0.0001,iter=10):
 
   for cycle in xrange(cycleBW):
   
-   # FORWARD-BACKWARD %%% MF E STEP 
+    # FORWARD-BACKWARD %%% MF E STEP 
     gammaNew=[]
     GammaX=np.zeros((M*K,D))
     Eta=np.zeros((K*M,K*M))
@@ -148,61 +152,82 @@ def PMFHMM(X,T=0,M=2,K=2,cycleBW=100,tol=0.0001,iter=10):
         iterMF=l
         break
 
-  # calculating mean field log likelihood 
+    # calculating mean field log likelihood 
     
     oldLik=lik
     lik=calcmflike(Xalt,T,mf,M,K,Mu,Cov,P,Pi); # to modify!
-  
-  #  first and second order correlations - P (s_i, s_j | O)
+   
+    #  first and second order correlations - P (s_i, s_j | O)
 
     gamma=mf
     Gamma=gamma
     Eta=np.dot(gamma.T,gamma)
     gammaSum=gamma.sum(axis=0)
 
-  for j in xrange(M):
-    d2=range(j*K,(j+1)*K)
-    Eta[np.ix_(d2,d2)]=np.diag(gammaSum[d2]) 
+    for j in xrange(M):
+      d2=range(j*K,(j+1)*K)
+      Eta[np.ix_(d2,d2)]=np.diag(gammaSum[d2]) 
 
-  
-  GammaX=np.dot(gamma.T,X)
-  Eta=(Eta+Eta.T)/2
+    
+    GammaX=np.dot(gamma.T,X)
+    Eta=(Eta+Eta.T)/2
 
-  X_j=np.zeros((M*K,K))
-  for i in range(T-1):
-    d1=range(i*N,(i+1)*N)
-    d2=range((i+1)*N,(i+2)*N)
-    for j in range(M):
-      jK=range(j*K,(j+1)*K)
-      # t=gamma(d1,jK)'*gamma(d2,jK);
-      t = P[jK,:]*np.dot(alpha[d1,jK].T,(beta[d2,jK]*expH[d2,jK]))
-      X_j[jK,:]=X_j[jK,:]+t/np.sum(t)
+    X_j=np.zeros((M*K,K))
+    for i in range(T-1):
+      d1=range(i*N,(i+1)*N)
+      d2=range((i+1)*N,(i+2)*N)
+      for j in range(M):
+        jK=range(j*K,(j+1)*K)
+        # t=gamma(d1,jK)'*gamma(d2,jK);
+        t = P[jK,:]*np.dot(alpha[d1,jK].T,(beta[d2,jK]*expH[d2,jK]))
+        X_j[jK,:]=X_j[jK,:]+t/np.sum(t)
 
-
-  
-  # Calculate Likelihood and determine convergence
-  
-  logLik.append(lik)
-  if (nargout>=6)
-    truelik=calclike(X,T,M,K,Mu,Cov,P,Pi);
-    TL=[TL truelik];
-    fprintf('cycle %i mf iters %i log like= %f true log like= %f',cycle,itermf,lik,truelik);  
-  elseif (nargout==5)
-    fprintf('cycle %i mf iters %i log likelihood = %f ',cycle,itermf,lik);
-  else
-    fprintf('cycle %i mf iters %i ',cycle,itermf);
-  end;
-  
-  if (nargout>=5)
-    if (cycle<=2)
-      likbase=lik;
-    elseif (lik<oldlik-2)
-      fprintf('v');
-    elseif (lik<oldlik) 
-      fprintf('v');
-    elseif ((lik-likbase)<(1 + tol)*(oldlik-likbase)) 
-      fprintf('\n');
-      break;
+    # Calculate Likelihood and determine convergence
+    
+    logLik.append(lik)
+      trueLoglik.append(calclike(X,T,M,K,Mu,Cov,P,Pi))
+      fprintf('cycle %i mf iters %i log like= %f true log like= %f',cycle,itermf,lik,truelik);  
+    
+      if (cycle<=2)
+        likbase=lik;
+      elseif (lik<oldlik-2)
+        fprintf('v');
+      elseif (lik<oldlik) 
+        fprintf('v');
+      elseif ((lik-likbase)<(1 + tol)*(oldlik-likbase)) 
+        fprintf('\n');
+        break;
+      end;
     end;
-  end;
-  fprintf('\n');
+    fprintf('\n');
+
+    #### M STEP 
+    
+    # outputs -- using SVD as generally ill-conditioned (Mu=pinv(Eta)*GammaX);
+    [U,S,V]=svd(Eta)
+    S_i=np.zeros((K*M,K*M))
+    for i in xrange(K*M):
+      if S[i]<len(S)*norm(S)*0.001:
+        S_i[i,i]=0
+      else:
+       S_i[i,i]=1/S[i]
+   
+    Mu=np.dot(np.dot(np.dot(V,S_i),U.T),GammaX)
+    
+    # covariance
+    Cov=XX-np.dot(np.dot(GammaX.T,pinv(Eta)),GammaX)/(N*T)
+    Cov=(Cov+Cov.T)/2
+    detCov=det(Cov)
+    
+    
+    # transition matrix 
+    for i in xrange(K*M):
+      constant=X_j[i,:].sum()
+      if constant==0:
+        P[i,:]=np.ones((1,K))/K
+      else:
+        P[i,:]=X_j[i,:]/constant
+    
+    # priors (note Gamma in NT order not TN order)
+    
+    Pi=reshape(csum(Gamma(1:N,:)),K,M)/N;
